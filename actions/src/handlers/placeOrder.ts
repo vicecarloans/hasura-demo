@@ -1,59 +1,61 @@
-const express = require("express");
-const { Pool } = require("pg");
+import { Request, Response } from "express";
+import { pool } from "../db";
+import {
+  HasuraActionPayload,
+  PlaceOrderInput,
+  ProductRow,
+} from "../types";
 
-const app = express();
-app.use(express.json());
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const pool = new Pool({
-  connectionString:
-    process.env.DATABASE_URL ||
-    "postgres://postgres:postgrespassword@postgres:5432/hasura_demo",
-});
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-app.get("/healthz", (_req, res) => {
-  res.json({ status: "ok" });
-});
-
-app.post("/place-order", async (req, res) => {
-  const { input } = req.body;
-  const { user_id, items, shipping_address, notes } = input.input;
+export async function placeOrder(req: Request, res: Response): Promise<void> {
+  const body = req.body as HasuraActionPayload<PlaceOrderInput>;
+  const { user_id, items, shipping_address, notes } = body.input.input;
 
   if (!items || items.length === 0) {
-    return res.status(400).json({ message: "Order must contain at least one item" });
+    res.status(400).json({ message: "Order must contain at least one item" });
+    return;
   }
 
-  // Validate user_id format
   if (!UUID_REGEX.test(user_id)) {
-    return res.status(400).json({ message: "Invalid user_id format: must be a valid UUID" });
+    res
+      .status(400)
+      .json({ message: "Invalid user_id format: must be a valid UUID" });
+    return;
   }
 
-  // Validate item quantities and product_id formats, reject duplicates
-  const seenProductIds = new Set();
+  const seenProductIds = new Set<string>();
   for (const item of items) {
     if (!UUID_REGEX.test(item.product_id)) {
-      return res.status(400).json({ message: `Invalid product_id format: ${item.product_id}` });
+      res
+        .status(400)
+        .json({ message: `Invalid product_id format: ${item.product_id}` });
+      return;
     }
     if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
-      return res.status(400).json({
+      res.status(400).json({
         message: `Invalid quantity for product ${item.product_id}: must be a positive integer`,
       });
+      return;
     }
     if (seenProductIds.has(item.product_id)) {
-      return res.status(400).json({
+      res.status(400).json({
         message: `Duplicate product_id: ${item.product_id}. Combine quantities into a single item.`,
       });
+      return;
     }
     seenProductIds.add(item.product_id);
   }
 
-  // Validate shipping_address is valid JSON if provided
   if (shipping_address) {
     try {
       JSON.parse(shipping_address);
-    } catch (e) {
-      return res.status(400).json({ message: "shipping_address must be a valid JSON string" });
+    } catch {
+      res
+        .status(400)
+        .json({ message: "shipping_address must be a valid JSON string" });
+      return;
     }
   }
 
@@ -63,20 +65,24 @@ app.post("/place-order", async (req, res) => {
     await client.query("BEGIN");
 
     // 1. Validate user exists
-    const userResult = await client.query("SELECT id FROM users WHERE id = $1", [user_id]);
+    const userResult = await client.query(
+      "SELECT id FROM users WHERE id = $1",
+      [user_id],
+    );
     if (userResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ message: `User ${user_id} not found` });
+      res.status(400).json({ message: `User ${user_id} not found` });
+      return;
     }
 
     // 2. Validate products exist, are active, and lock rows for stock check
     const productIds = items.map((item) => item.product_id);
-    const productsResult = await client.query(
+    const productsResult = await client.query<ProductRow>(
       "SELECT id, name, price, stock_quantity, is_active FROM products WHERE id = ANY($1::uuid[]) FOR UPDATE",
-      [productIds]
+      [productIds],
     );
 
-    const productsMap = new Map();
+    const productsMap = new Map<string, ProductRow>();
     for (const row of productsResult.rows) {
       productsMap.set(row.id, row);
     }
@@ -85,50 +91,57 @@ app.post("/place-order", async (req, res) => {
       const product = productsMap.get(item.product_id);
       if (!product) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ message: `Product ${item.product_id} not found` });
+        res
+          .status(400)
+          .json({ message: `Product ${item.product_id} not found` });
+        return;
       }
       if (!product.is_active) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ message: `Product "${product.name}" is not available` });
+        res
+          .status(400)
+          .json({ message: `Product "${product.name}" is not available` });
+        return;
       }
       if (product.stock_quantity < item.quantity) {
         await client.query("ROLLBACK");
-        return res.status(400).json({
+        res.status(400).json({
           message: `Insufficient stock for "${product.name}": requested ${item.quantity}, available ${product.stock_quantity}`,
         });
+        return;
       }
     }
 
     // 3. Calculate total from server-side prices
     let totalAmount = 0;
     for (const item of items) {
-      const product = productsMap.get(item.product_id);
+      const product = productsMap.get(item.product_id)!;
       totalAmount += parseFloat(product.price) * item.quantity;
     }
 
     // 4. Create the order
     const shippingAddr = shipping_address || null;
-    const orderResult = await client.query(
+    const orderResult = await client.query<{ id: string }>(
       `INSERT INTO orders (user_id, status, total_amount, shipping_address, notes)
        VALUES ($1, 'pending', $2, $3::jsonb, $4)
        RETURNING id`,
-      [user_id, totalAmount, shippingAddr, notes || null]
+      [user_id, totalAmount, shippingAddr, notes || null],
     );
     const orderId = orderResult.rows[0].id;
 
     // 5. Create order items and decrement stock
     for (const item of items) {
-      const product = productsMap.get(item.product_id);
+      const product = productsMap.get(item.product_id)!;
 
       await client.query(
         `INSERT INTO order_items (order_id, product_id, quantity, unit_price)
          VALUES ($1, $2, $3, $4)`,
-        [orderId, item.product_id, item.quantity, product.price]
+        [orderId, item.product_id, item.quantity, product.price],
       );
 
       await client.query(
         "UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2",
-        [item.quantity, item.product_id]
+        [item.quantity, item.product_id],
       );
     }
 
@@ -136,7 +149,7 @@ app.post("/place-order", async (req, res) => {
 
     const itemsCount = items.reduce((sum, item) => sum + item.quantity, 0);
 
-    return res.json({
+    res.json({
       order_id: orderId,
       total_amount: totalAmount,
       status: "pending",
@@ -152,13 +165,10 @@ app.post("/place-order", async (req, res) => {
       }
     }
     console.error("Error placing order:", err);
-    return res.status(500).json({ message: "Internal server error while placing order" });
+    res
+      .status(500)
+      .json({ message: "Internal server error while placing order" });
   } finally {
     if (client) client.release();
   }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Actions handler running on port ${PORT}`);
-});
+}

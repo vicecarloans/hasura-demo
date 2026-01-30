@@ -1,15 +1,15 @@
 actions:
-  - name: placeOrder
+  - name: place_order
     definition:
       kind: synchronous
       handler: http://actions:3000/place-order
       forward_client_headers: true
-    permissions:
-      - role: admin
     comment: Place an order with stock validation and price calculation
-
 custom_types:
   enums: []
-  input_objects: []
-  objects: []
+  input_objects:
+    - name: PlaceOrderInput
+    - name: OrderItemInput
+  objects:
+    - name: PlaceOrderOutput
   scalars: []

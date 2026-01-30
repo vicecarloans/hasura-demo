@@ -1,0 +1,8 @@
+- "!include public_categories.yaml"
+- "!include public_order_items.yaml"
+- "!include public_order_summary.yaml"
+- "!include public_orders.yaml"
+- "!include public_product_stats.yaml"
+- "!include public_products.yaml"
+- "!include public_reviews.yaml"
+- "!include public_users.yaml"

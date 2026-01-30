@@ -1,5 +1,7 @@
 type Mutation {
-  placeOrder(input: PlaceOrderInput!): PlaceOrderOutput
+  place_order(
+    input: PlaceOrderInput!
+  ): PlaceOrderOutput
 }
 
 input PlaceOrderInput {
@@ -21,3 +23,4 @@ type PlaceOrderOutput {
   items_count: Int!
   message: String!
 }
+
