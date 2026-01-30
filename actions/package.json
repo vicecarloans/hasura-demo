@@ -1,0 +1,13 @@
+{
+  "name": "hasura-actions",
+  "version": "1.0.0",
+  "description": "Custom action handlers for Hasura demo",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "pg": "^8.13.0"
+  }
+}

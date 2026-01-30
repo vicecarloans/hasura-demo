@@ -1,0 +1,23 @@
+type Mutation {
+  placeOrder(input: PlaceOrderInput!): PlaceOrderOutput
+}
+
+input PlaceOrderInput {
+  user_id: String!
+  items: [OrderItemInput!]!
+  shipping_address: String
+  notes: String
+}
+
+input OrderItemInput {
+  product_id: String!
+  quantity: Int!
+}
+
+type PlaceOrderOutput {
+  order_id: String!
+  total_amount: Float!
+  status: String!
+  items_count: Int!
+  message: String!
+}

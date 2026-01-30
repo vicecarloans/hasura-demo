@@ -20,6 +20,24 @@ services:
       timeout: 5s
       retries: 5
 
+  actions:
+    build:
+      context: ./actions
+    container_name: hasura-actions
+    ports:
+      - "3000:3000"
+    restart: always
+    environment:
+      DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/hasura_demo
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   hasura:
     build:
       context: ./hasura
@@ -58,6 +76,8 @@ services:
       # HASURA_GRAPHQL_JWT_SECRET: '{"type":"HS256", "key": "your-secret-key-min-32-chars-long!!"}'
     depends_on:
       postgres:
+        condition: service_healthy
+      actions:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
